@@ -3,7 +3,7 @@ import functools
 import numpy as np
 import tensorflow as tf
 import pandas as pd
-from math import log
+import math
 from tensorflow import keras
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
@@ -12,140 +12,8 @@ from time import time
 from numpy.random import random, randint, seed
 from random import sample
 from matplotlib.ticker import FuncFormatter
-
-"""
-IMPORT AND PROCESS DATA
-"""
-
-
-class Data:
-
-    def __init__(self, d, trading_days):
-        self.trading_days = trading_days + 1
-        self.min_perc_days = 100
-        self.data = d
-        self.min_values = self.data.min()
-        self.max_values = self.data.max()
-        self.step = 0
-        self.index = 0
-
-    def reset(self):
-        high = len(self.data.index) - self.trading_days
-        self.index = np.random.randint(low=0, high=high)
-        self.step = 0
-        return
-
-    def take_step(self):
-        obs = self.data.iloc[self.index].values
-        self.index += 1
-        self.step += 1
-        done = self.step >= self.trading_days
-        return obs, done
-
-
-class Simulator:
-
-    def __init__(self, steps, trading_cost_bps, time_cost_bps):
-        self.trading_cost_bps = trading_cost_bps
-        self.time_cost_bps = time_cost_bps
-        self.steps = steps
-        self.step = 0
-        self.actions = np.zeros(self.steps)
-        self.navs = np.ones(self.steps)
-        self.market_navs = np.ones(self.steps)
-        self.strategy_returns = np.ones(self.steps)
-        self.positions = np.zeros(self.steps)
-        self.costs = np.zeros(self.steps)
-        self.trades = np.zeros(self.steps)
-        self.market_returns = np.zeros(self.steps)
-
-    def reset(self):
-        self.step = 0
-        self.actions.fill(0)
-        self.navs.fill(1)
-        self.market_navs.fill(1)
-        self.strategy_returns.fill(0)
-        self.positions.fill(0)
-        self.costs.fill(0)
-        self.trades.fill(0)
-        self.market_returns.fill(0)
-
-    def take_step(self, value, action, market_return):
-        bod_position = 0.0 if self.step == 0 else self.positions[self.step - 1]
-        bod_nav = 1.0 if self.step == 0 else self.navs[self.step - 1]
-        bod_market_nav = 1.0 if self.step == 0 else self.market_navs[self.step - 1]
-
-        self.market_returns[self.step] = market_return
-        self.actions[self.step] = action
-
-        self.positions[self.step] = action - 1
-
-        self.trades[self.step] = self.positions[self.step] - bod_position
-
-        trade_costs_pct = abs(self.trades[self.step]) * self.trading_cost_bps
-        self.costs[self.step] = trade_costs_pct + self.time_cost_bps
-        reward = ((bod_position * market_return) - self.costs[self.step])
-        val_change = (bod_position * market_return) - self.costs[self.step]
-        #reward = log((val_change + value)/value)
-        self.strategy_returns[self.step] = reward
-
-        if self.step != 0:
-            self.navs[self.step] = bod_nav * (1 + self.strategy_returns[self.step - 1])
-            self.market_navs[self.step] = bod_market_nav * (1 + self.market_returns[self.step - 1])
-
-        nav = self.navs[self.step]
-        market_nav = self.market_navs[self.step]
-        self.step += 1
-        return reward, nav, market_return, val_change
-
-    def result(self):
-        return pd.DataFrame({'action'         : self.actions,  # current action
-                             'nav'            : self.navs,  # starting Net Asset Value (NAV)
-                             'market_nav'     : self.market_navs,
-                             'market_return'  : self.market_returns,
-                             'strategy_return': self.strategy_returns,
-                             'position'       : self.positions,  # eod position
-                             'cost'           : self.costs,  # eod costs
-                             'trade'          : self.trades})  # eod trade)
-
-
-class TradingEnvironment():
-
-    def __init__(self, data, trading_days=252, trading_cost_bps=1e-3, time_cost_bps=1e-4):
-        self.trading_days = trading_days
-        self.trading_cost_bps = trading_cost_bps
-        self.time_cost_bps = time_cost_bps
-        self.src = Data(d=data, trading_days=self.trading_days)
-        self.sim = Simulator(steps=self.trading_days, trading_cost_bps=self.trading_cost_bps, time_cost_bps=self.time_cost_bps)
-        self.reset()
-
-    def step(self, action, value):
-        observation, done = self.src.take_step()
-        reward, nav, market_return, val_change = self.sim.take_step(value, action=action,
-                                          market_return=observation[2])
-        return observation, reward, done, nav, market_return, val_change
-
-    def reset(self):
-        self.src.reset()
-        self.sim.reset()
-        return self.src.take_step()[0]
-
-    def get_results(self):
-        return self.sim.result()
-
-    def run_strategy(self, strategy, return_df=True):
-        observation = self.reset()
-        done = False
-        while not done:
-            action = strategy(observation, self)
-            observation, reward, done, info = self.step(action)
-
-        return self.sim.result() if return_df else None
-
-
-"""
-DEFINE NEURAL NETWORKS
-"""
+import gc
+import resource
 
 
 class MyModel(tf.keras.Model):
@@ -196,18 +64,16 @@ class DQN:
 
         with tf.GradientTape() as tape:
             selected_action_values = self.predict(states)
-            #tf.nn.sigmoid_cross_entropy_with_logits
-            #tf.keras.losses.MSE
             loss = tf.keras.losses.MSE(actual_values, selected_action_values)
         variables = self.model.trainable_variables
         gradients = tape.gradient(loss, variables)
         self.optimizer.apply_gradients(zip(gradients, variables))
 
     def get_action(self, states, epsilon):
-        # if np.random.random() < epsilon:
-        #     return np.random.choice(self.num_actions)
-        # else:
-        return np.argmax(self.predict(np.atleast_2d(states))[0])
+        if np.random.random() < epsilon:
+            return np.random.choice(self.num_actions)
+        else:
+            return np.argmax(self.predict(np.atleast_2d(states))[0])
 
     def add_experience(self, exp):
         if len(self.experience['s']) >= self.max_experiences:
@@ -221,88 +87,6 @@ class DQN:
         variables2 = TrainNet.model.trainable_variables
         for v1, v2 in zip(variables1, variables2):
             v1.assign(v2.numpy())
-
-
-"""
-TRADING FUNCTION
-"""
-
-
-def trade(data, TrainNet, TargetNet, epsilon, copy_step, val):
-    rewards_total = 0
-    value = val
-    market_value = val
-    rewards = []
-    step = 0
-    done = False
-    env = TradingEnvironment(data)
-    observation = TradingEnvironment.reset(env)
-    navs, market_navs, diffs = [], [], []
-    while not done:
-        if epsilon > .01:
-            epsilon -= 1.8e-6
-        action = TrainNet.get_action(observation, epsilon)
-        prev_observation = observation
-        observation, reward, done, nav, market_reward, val_change = TradingEnvironment.step(env, action, value)
-
-        reward_n = 1
-        last_r = 1
-        if len(rewards) != 0:
-            reward_n = np.sum(rewards)
-            last_r = rewards[-1]
-
-        r = (1 + (action - 1)*((reward-last_r)/last_r))*(last_r/reward_n)
-
-        value = value + val_change
-        market_value = market_value + market_reward
-        rewards.append(reward)
-        navs.append(nav)
-        market_navs.append(market_reward)
-        diff = nav - market_reward
-        diffs.append(diff)
-        rewards_total += reward
-        if done:
-            _ = TradingEnvironment.reset(env)
-
-        a2, a3 = 0, 0
-        r2, r3 = 0, 0
-        if action == 0:
-            a2 = 1
-            a3 = 2
-            r2 = r * 0
-            r3 = r * -1
-        elif action == 1:
-            a2 = 0
-            a3 = 2
-            r2 = (1 + (a2 - 1)*((reward-last_r)/last_r))*(last_r/reward_n)
-            r3 = (1 + (a3 - 1)*((reward-last_r)/last_r))*(last_r/reward_n)
-        elif action == 2:
-            a2 = 0
-            a3 = 1
-            r2 = (1 + (a2 - 1)*((reward-last_r)/last_r))*(last_r/reward_n)
-            r3 = (1 + (a3 - 1)*((reward-last_r)/last_r))*(last_r/reward_n)
-
-        exp = {'s': prev_observation, 'a': action, 'r': r, 's2': observation, 'done': done}
-        exp2 = {'s': prev_observation, 'a': a2, 'r': r2, 's2': observation, 'done': done}
-        exp3 = {'s': prev_observation, 'a': a3, 'r': r3, 's2': observation, 'done': done}
-        TrainNet.add_experience(exp)
-        TrainNet.add_experience(exp2)
-        TrainNet.add_experience(exp3)
-
-
-        if step % 5 == 0:
-            TrainNet.train(TargetNet)
-
-        step += 1
-        if step % copy_step == 0:
-            TargetNet.copy_weights(TrainNet)
-
-    return rewards_total, np.mean(navs), market_value, np.mean(diffs), epsilon, value
-
-
-"""
-PROCESS DATA
-"""
 
 
 def momentum100(data, window=100):
@@ -332,39 +116,10 @@ def rsi(data, window=14):
     RS2 = rolling_up / rolling_down
     return 100 - (100 / (1 + RS2))
 
-
-def process(path):
-        parse_dates = ['date']
-        train_df = pd.read_csv(path, parse_dates=parse_dates)
-        train = train_df[['date', 'adj_close', 'adj_volume']].dropna()
-        train.columns = ['date', 'close', 'volume']
-
-        train['returns'] = train['close'].pct_change()
-        train['close_pct_100'] = momentum100(train['close'])
-        train['volume_pct_100'] = momentum100(train['volume'])
-        train['close_pct_20'] = momentum20(train['close'])
-        train['volume_pct_20'] = momentum20(train['volume'])
-        train['return_5'] = train['returns'].pct_change(5)
-        train['return_21'] = train['returns'].pct_change(21)
-        train['rsi'] = rsi(train['close'])
-        train = train.replace((np.inf, -np.inf), np.nan).dropna()
-        r = train['returns'].copy()
-        d = train['date'].copy()
-        scaler = StandardScaler()
-        train[['close', 'volume', 'close_pct_100', 'volume_pct_100', 'close_pct_20', 'volume_pct_20', 'return_5',
-               'return_21', 'rsi']] = scaler.fit_transform(
-                train[['close', 'volume', 'close_pct_100', 'volume_pct_100', 'close_pct_20', 'volume_pct_20', 'return_5', 'return_21', 'rsi']])
-
-        test = train.loc[(train['date'] >= '2011-06-01')]
-        test = test.iloc[:, 1:]
-        train = train.loc[(train['date'] < '2011-06-01')]
-        train = train.iloc[:, 1:]
-        return train
-
-def process_val(path):
-    parse_dates = ['date']
+def process_train(path):
+    parse_dates = ['Date']
     train_df = pd.read_csv(path, parse_dates=parse_dates)
-    train = train_df[['date', 'adj_close', 'adj_volume']].dropna()
+    train = train_df[['Date', 'Adj Close', 'Volume']].dropna()
     train.columns = ['date', 'close', 'volume']
 
     train['returns'] = train['close'].pct_change()
@@ -376,43 +131,15 @@ def process_val(path):
     train['return_21'] = train['returns'].pct_change(21)
     train['rsi'] = rsi(train['close'])
     train = train.replace((np.inf, -np.inf), np.nan).dropna()
-    r = train['returns'].copy()
-    d = train['date'].copy()
-    scaler = StandardScaler()
-    train[['close', 'volume', 'close_pct_100', 'volume_pct_100', 'close_pct_20', 'volume_pct_20', 'return_5',
-           'return_21', 'rsi']] = scaler.fit_transform(
-        train[['close', 'volume', 'close_pct_100', 'volume_pct_100', 'close_pct_20', 'volume_pct_20', 'return_5',
-               'return_21', 'rsi']])
-
-    test = train.loc[(train['date'] >= '2011-06-01')]
-    test = test.iloc[:, 1:]
     train = train.loc[(train['date'] < '2011-06-01')]
     train = train.iloc[:, 1:]
-    return test
-
-class Val_TradingEnvironment():
-
-    def __init__(self, data, trading_days, trading_cost_bps=1e-3, time_cost_bps=1e-4):
-        self.trading_days = trading_days
-        self.trading_cost_bps = trading_cost_bps
-        self.time_cost_bps = time_cost_bps
-        self.src = Data(d=data, trading_days=self.trading_days)
-        self.sim = Simulator(steps=self.trading_days, trading_cost_bps=self.trading_cost_bps, time_cost_bps=self.time_cost_bps)
-
-
-    def step(self, action, observation):
-        reward, nav, market_nav = self.sim.take_step(action=action,
-                                          market_return=observation[2])
-        return reward, nav, market_nav
-
+    return train
 
 def main():
 
-    # PROCESS DATA
-    data = process('train_prices.csv')
+    data = process_train('bp.csv')
 
-    # DECLARE VARIABLES
-    num_states = 10
+    num_states = 13
     num_actions = 3
     hidden_units = [256, 256, 256]
     gamma = 0.99
@@ -420,99 +147,134 @@ def main():
     min_experiences = 100
     minibatch_size = 96
     learning_rate = .00025
-
-    # DEFINE NETWORKS
-
-    TrainNet = DQN(num_states, num_actions, hidden_units, gamma, max_experiences, min_experiences, minibatch_size, learning_rate)
-    TargetNet = DQN(num_states, num_actions, hidden_units, gamma, max_experiences, min_experiences, minibatch_size, learning_rate)
-
-    # DEFINE TRAINING VARIABLES
-    max_episodes = 10000
+    tau = 100
     epsilon = 1
     decay = 0.9999
-    copy_step = 100
+
+
+    TrainNet = DQN(num_states, num_actions, hidden_units, gamma, max_experiences, min_experiences, minibatch_size,
+                   learning_rate)
+    TargetNet = DQN(num_states, num_actions, hidden_units, gamma, max_experiences, min_experiences, minibatch_size,
+                    learning_rate)
+
+    steps = 63
+    max_episodes = 10000
+    numberOfRows = steps*max_episodes
+    trading_cost_bps = 1e-3
+    time_cost_bps = 1e-4
+
+    trade_log = pd.DataFrame(index=np.arange(0, numberOfRows), columns=("Price", "Action", "Stock Holdings",
+                                                                        "Portfolio Value", "Buy and Hold Value"))
+
     episodes = []
-    average_rewards = []
-    navs, market_navs, diffs = [], [], []
-    total_rewards = np.empty(max_episodes)
-    runtime = 0
-    total_value = 10000
+    advantages = []
 
     for episode in range(max_episodes):
-        episode_start = time()
 
-        total_reward, nav, market_nav, diff, eps, value = trade(data, TrainNet, TargetNet, epsilon, copy_step, total_value)
-
-        total_value = value
-        total_rewards[episode] += total_reward
-        navs.append(nav)
-        market_navs.append(market_nav)
-        diffs.append(diff)
-        avg_rewards = total_rewards[max(0, episode - 100):(episode + 1)].mean()
-        average_rewards.append(avg_rewards)
         episodes.append(episode)
-        episode_time = time() - episode_start
-        runtime += episode_time
+        cash = 100000
+        stock_holdings = 100000
+        buy_and_hold = 100000
+        buy_and_hold_cash = 100000
+        trade_units = 100
+        portfolio_value = 100000
+        market_value = 100000
 
-        if eps > .01:
-            epsilon = eps * decay
+        done = False
 
-        # if episode % 100 == 0:
-        #     print('Episode: {:>4d} | Value: {:>6.3f} | Avg Reward: {:>5.3f} | '
-        #           'NAV: {:>5.3f} | Market Value: {:>5.3f} | Delta: {:4.0f}'.format(episode,
-        #             value, avg_rewards, navs[episode], market_navs[episode], np.sum([s > 0 for s in diffs[-100:]])))
+        high = len(data.index) - steps
+        start_index = np.random.randint(low=0, high=high)
+        actions = []
 
-        if episode % 100 == 0:
-            print('Episode: {:>4d} | Value: {:>6.3f} | Avg Reward: {:>5.3f} | Market Value: {:>5.3f}'.format(episode,
-                    value, avg_rewards, market_navs[episode]))
+        for step in range(steps):
+
+            advs = []
+
+            index = start_index + step
+            observation = data.iloc[index]
+            price = observation[0]
+            market_return = observation[2]
+
+            if step == 0:
+                action = 1
+                portfolio_value = (price * stock_holdings) + cash
+                market_value = (price * buy_and_hold) + buy_and_hold_cash
+
+                portfolio = np.array([stock_holdings, portfolio_value, market_value])
+                observation = np.append(observation, portfolio)
+
+                trade_log.loc[((episode*steps)+step)] = [price, 1, stock_holdings, portfolio_value, market_value]
+
+            else:
+                if epsilon > .01:
+                    epsilon -= 1.8e-8
+
+                portfolio = np.array([stock_holdings, portfolio_value, market_value])
+                observation = np.append(observation, portfolio)
+
+                action = TrainNet.get_action(observation, epsilon)
+                action = action - 1
+                prev_observation = observation
+
+                observation = data.iloc[index + 1]
+                price = observation[0]
+                market_return = observation[2]
+
+                new_market_value = (price * buy_and_hold) + buy_and_hold_cash #- time_cost_bps
+                new_portfolio_value = portfolio_value
+
+                if action == 0:
+                    new_portfolio_value = (stock_holdings * price) + cash #- time_cost_bps
+                elif stock_holdings < trade_units and action == -1:
+                    action = 0
+                    new_portfolio_value = (stock_holdings * price) + cash #- time_cost_bps
+                elif stock_holdings >= trade_units and action == -1:
+                    stock_holdings -= trade_units
+                    cash += ((market_return * action) * trade_units) #- ((trading_cost_bps + time_cost_bps) * trade_units)
+                    new_portfolio_value = (stock_holdings * price) + cash
+                elif cash >= (price*trade_units) and action == 1:
+                    stock_holdings += trade_units
+                    cash -= (price * trade_units) #+ ((trading_cost_bps + time_cost_bps) * trade_units)
+                    new_portfolio_value = (stock_holdings * price) + cash
+                else:
+                    new_portfolio_value = (stock_holdings * price) + cash #- time_cost_bps
+
+                reward = action * market_return
+
+                portfolio = np.array([stock_holdings, new_portfolio_value, new_market_value])
+                observation = np.append(observation, portfolio)
+
+                trade_log.loc[((episode * steps) + step)] = [price, action, stock_holdings, new_portfolio_value, new_market_value]
+
+                portfolio_value = new_portfolio_value
+                market_value = new_market_value
+
+                exp = {'s': prev_observation, 'a': action, 'r': reward, 's2': observation, 'done': done}
+                TrainNet.add_experience(exp)
+                TrainNet.train(TargetNet)
+
+                if step % tau == 0:
+                    TargetNet.copy_weights(TrainNet)
+
+            advs.append(((portfolio_value / market_value) - 1))
+            actions.append(action)
+
+            if epsilon > .01:
+                epsilon = epsilon * decay
+
+        advantages.append(np.mean(advs))
+        print("Sell: ", actions.count(-1), " Hold: ", actions.count(0), " Buy: ", actions.count(1))
+        print("Cash: ", cash)
 
 
-    results = pd.DataFrame({'episode': list(range(1, episode + 2)),
-                            'nav': navs,
-                            'market_nav': market_navs,
-                            'outperform': diffs})
-
-    fn = 'trading_agent_result_no_cost.csv'
-    results.to_csv(fn, index=False)
-
-    results = pd.read_csv('trading_agent_result_no_cost.csv')
-    results.columns = ['Episode', 'Agent', 'Market', 'difference']
-    results = results.set_index('Episode')
-    results['Strategy Wins (%)'] = (results.difference > 0).rolling(100).sum()
-    results.info()
-
-    fig, axes = plt.subplots(ncols=2, figsize=(14,4))
-    (results[['Agent', 'Market']]
-        .sub(1)
-        .rolling(100)
-        .mean()
-        .plot(ax=axes[0],
-            title='Annual Returns (Moving Average)', lw=1))
-    results['Strategy Wins (%)'].div(100).rolling(50).mean().plot(ax=axes[1], title='Agent Outperformance (%, Moving Average)');
-    for ax in axes:
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: '{:.0%}'.format(y)))
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: '{:,.0f}'.format(x)))
-    fig.tight_layout()
-    fig.savefig('trading_agent', dpi=300)
+        if episode % 1 == 0:
+            print('Episode: {:5d} | Epsilon: {:1.3f} | '
+                  'Agent Stocks : {:7d} | Total Agent Value: {:09.2f} | Buy and Hold Value: {:09.2f} | Agent Advantage %: {:+2.2f}'.format(
+                episode, epsilon, stock_holdings, portfolio_value,  market_value, np.mean(advs)*100))
 
 
-    val_data = process_val('train_prices.csv')
-    days = len(val_data.index)
-    env = Val_TradingEnvironment(val_data, days)
-    steps, val_rewards, val_navs, val_market_navs = [], [], [], []
-    for i in range(days):
-        epsilon = 0
-        observation = val_data.iloc[i]
-        action = TrainNet.get_action(observation, epsilon)
-        reward, nav, market_nav = Val_TradingEnvironment.step(env, action, observation)
-        val_rewards.append(reward)
-        val_navs.append(nav)
-        val_market_navs.append(market_nav)
-        steps.append(i)
-
-    print("Sum agent rewards: ", sum(val_rewards))
-    print("Sum agent returns: ", sum(val_navs))
-    print("Sum market returns: ", sum(val_market_navs))
-
+    plt.plot(episodes, advantages)
+    plt.grid()
+    plt.show()
 
 main()
