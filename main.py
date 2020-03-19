@@ -131,13 +131,13 @@ def process_train(path):
     train['return_21'] = train['returns'].pct_change(21)
     train['rsi'] = rsi(train['close'])
     train = train.replace((np.inf, -np.inf), np.nan).dropna()
-    train = train.loc[(train['date'] < '2011-06-01')]
+    #train = train.loc[(train['date'] < '2011-06-01')]
     train = train.iloc[:, 1:]
     return train
 
 def main():
 
-    data = process_train('bp.csv')
+    data = process_train('BRK-B.csv')
 
     num_states = 13
     num_actions = 3
@@ -176,7 +176,7 @@ def main():
         stock_holdings = 100000
         buy_and_hold = 100000
         buy_and_hold_cash = 100000
-        trade_units = 100
+        trade_units = 1000
         portfolio_value = 100000
         market_value = 100000
 
@@ -230,7 +230,7 @@ def main():
                     new_portfolio_value = (stock_holdings * price) + cash #- time_cost_bps
                 elif stock_holdings >= trade_units and action == -1:
                     stock_holdings -= trade_units
-                    cash += ((market_return * action) * trade_units) #- ((trading_cost_bps + time_cost_bps) * trade_units)
+                    cash += (price * trade_units) #- ((trading_cost_bps + time_cost_bps) * trade_units)
                     new_portfolio_value = (stock_holdings * price) + cash
                 elif cash >= (price*trade_units) and action == 1:
                     stock_holdings += trade_units
@@ -240,6 +240,8 @@ def main():
                     new_portfolio_value = (stock_holdings * price) + cash #- time_cost_bps
 
                 reward = action * market_return
+                #reward = math.log(new_portfolio_value/portfolio_value)
+                #reward = (new_portfolio_value/new_market_value)
 
                 portfolio = np.array([stock_holdings, new_portfolio_value, new_market_value])
                 observation = np.append(observation, portfolio)
@@ -265,6 +267,7 @@ def main():
         advantages.append(np.mean(advs))
         print("Sell: ", actions.count(-1), " Hold: ", actions.count(0), " Buy: ", actions.count(1))
         print("Cash: ", cash)
+        print("Price: ", price)
 
 
         if episode % 1 == 0:
@@ -273,7 +276,16 @@ def main():
                 episode, epsilon, stock_holdings, portfolio_value,  market_value, np.mean(advs)*100))
 
 
-    plt.plot(episodes, advantages)
+    e = []
+    a = []
+    for i in episodes:
+        if i%50==0:
+            e.append(i)
+    for i in range(len(advantages)):
+        if i%50==0:
+            a.append(advantages[i])
+    plt.suptitle('Berkshire Hathaway', fontsize=20)
+    plt.plot(e, a)
     plt.grid()
     plt.show()
 
