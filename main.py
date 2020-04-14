@@ -1,5 +1,4 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
-import functools
 import numpy as np
 import tensorflow as tf
 import pandas as pd
@@ -7,14 +6,6 @@ import math
 from tensorflow import keras
 import matplotlib.pyplot as plt
 from scipy import signal
-from sklearn.preprocessing import scale
-from collections import deque, namedtuple
-from time import time
-from numpy.random import random, randint, seed
-from random import sample
-from matplotlib.ticker import FuncFormatter
-import gc
-import resource
 
 
 class MyModel(tf.keras.Model):
@@ -62,12 +53,10 @@ class DQN:
             dones = np.asarray([self.experience['done'][i] for i in ids])
             value_next = np.max(TargetNet.predict(states_next), axis=1)
             actual_values = np.where(dones, rewards, rewards + self.gamma * value_next)
-            #print(TargetNet.predict(states_next))
 
             with tf.GradientTape() as tape:
                 selected_action_values = tf.math.reduce_sum(
                     self.predict(states) * tf.one_hot(actions, self.num_actions), axis=1)
-                #print(TargetNet.predict(states) * tf.one_hot(actions, self.num_actions))
                 loss = tf.math.reduce_sum(tf.square(actual_values - selected_action_values))
 
 
@@ -128,9 +117,7 @@ def process_train(path, split_date):
     train = train_df[['Date', 'Adj Close', 'Volume']].dropna()
     train.columns = ['date', 'close', 'volume']
     detrend_close = signal.detrend(train['close'])
-    # detrend_close += 50
     detrend_close += 25
-    #adj_close = pd.Series(detrend_close)
 
     adj_close = train['close']
 
@@ -153,9 +140,7 @@ def process_test(path, split_date):
     train = train_df[['Date', 'Adj Close', 'Volume']].dropna()
     train.columns = ['date', 'close', 'volume']
     detrend_close = signal.detrend(train['close'])
-    # detrend_close += 50
     detrend_close += 25
-    #adj_close = pd.Series(detrend_close)
 
     adj_close = train['close']
 
@@ -174,15 +159,15 @@ def process_test(path, split_date):
 
 def main():
 
-    split_date = '2015-01-01'
-    data = process_train('BRK-B.csv', split_date)
-    # r = data.returns.copy()
-    # data = pd.DataFrame(scale(data), columns=data.columns, index=data.index)
-    # data['returns'] = r
+    stock = 'SPY'
+    split_date = '2019-01-01'
+    if stock in ['MNST', 'APA', 'AAPL']:
+        split_date = '2017-01-01'
 
-    test_data = process_test('BRK-B.csv', split_date)
+    path = stock + '.csv'
+    data = process_train(path, split_date)
 
-    #corr_data = process_train('CVX.csv')
+    test_data = process_test(path, split_date)
 
     num_states = 13
     num_actions = 3
@@ -203,8 +188,6 @@ def main():
     steps = 63
     max_episodes = 500
     numberOfRows = steps*max_episodes
-    trading_cost_bps = 1e-3
-    time_cost_bps = 1e-4
 
     trade_log = pd.DataFrame(index=np.arange(0, numberOfRows), columns=("Price", "Action", "Stock Holdings",
                                                                         "Portfolio Value", "Buy and Hold Value"))
@@ -215,10 +198,10 @@ def main():
     for episode in range(max_episodes):
 
         episodes.append(episode)
-        cash = 10000
+        cash = 1000
         stock_holdings = 100
         buy_and_hold = 100
-        buy_and_hold_cash = 10000
+        buy_and_hold_cash = 1000
         trade_units = 1
         portfolio_value = 1000
         market_value = 1000
@@ -240,8 +223,6 @@ def main():
             price = observation[0]
             market_return = observation[2]
 
-            #corr_observation = corr_data.iloc[index]
-
             if step == 0:
                 action = 1
                 print("Start Price: ", price)
@@ -249,17 +230,13 @@ def main():
                 market_value = (price * buy_and_hold) + buy_and_hold_cash
 
                 portfolio = np.array([stock_holdings, portfolio_value, market_value])
-                #observation = np.append(observation, corr_observation)
                 observation = np.append(observation, portfolio)
 
                 trade_log.loc[((episode*steps)+step)] = [price, 1, stock_holdings, portfolio_value, market_value]
 
             else:
-                # if epsilon > .01:
-                #     epsilon -= epsilon_linear_step
 
                 portfolio = np.array([stock_holdings, portfolio_value, market_value])
-                #observation = np.append(observation, corr_observation)
                 observation = np.append(observation, portfolio)
 
                 action = TrainNet.get_action(observation, epsilon)
@@ -271,31 +248,26 @@ def main():
                 price = observation[0]
                 market_return = observation[2]
 
-                #corr_observation = corr_data.iloc[index + 1]
-
                 new_portfolio_value = portfolio_value
-                new_market_value = (price * buy_and_hold) + buy_and_hold_cash #- time_cost_bps
+                new_market_value = (price * buy_and_hold) + buy_and_hold_cash
 
                 if stock_holdings >= trade_units and action == -1:
                     stock_holdings -= trade_units
-                    cash += (price * trade_units) #- ((trading_cost_bps + time_cost_bps) * trade_units)
+                    cash += (price * trade_units)
                     new_portfolio_value = (stock_holdings * price) + cash
                 elif cash >= (price*trade_units) and action == 1:
                     stock_holdings = stock_holdings + trade_units
-                    cash -= (price * trade_units) #+ ((trading_cost_bps + time_cost_bps) * trade_units)
+                    cash -= (price * trade_units)
                     new_portfolio_value = (stock_holdings * price) + cash
 
                 else:
                     action = 0
-                    new_portfolio_value = (stock_holdings * price) + cash #- (time_cost_bps * trade_units)
+                    new_portfolio_value = (stock_holdings * price) + cash
 
-                #reward = action * market_return
-                #reward = math.log(new_portfolio_value/portfolio_value)
-                reward = (new_portfolio_value - portfolio_value)/portfolio_value
+                reward = math.log(new_portfolio_value/portfolio_value)
                 rewards.append(reward)
 
                 portfolio = np.array([stock_holdings, new_portfolio_value, new_market_value])
-                #observation = np.append(observation, corr_observation)
                 observation = np.append(observation, portfolio)
 
                 trade_log.loc[((episode * steps) + step)] = [price, action, stock_holdings, new_portfolio_value, new_market_value]
@@ -338,15 +310,17 @@ def main():
         print("------------------------------------------------------------------")
 
 
-    test_cash = 10000
-    test_buy_hold_cash = 10000
-    test_holdings = 1000
-    test_buy_and_hold = 1000
+    test_cash = 100
+    test_buy_hold_cash = 100
+    test_holdings = 100
+    test_buy_and_hold = 100
     test_portfolio_value = 1000
     test_market_value = 1000
 
     test_episode = []
     test_return = []
+    agent_value = []
+    market_value = []
 
     for index in range(len(test_data.index)):
         test_episode.append(index)
@@ -356,7 +330,10 @@ def main():
             price = observation[0]
             test_portfolio_value = (price * test_holdings) + test_cash
             test_market_value = (price * test_buy_and_hold) + test_buy_hold_cash
-            test_return.append(1)
+            test_return.append(0)
+            agent_value.append(test_portfolio_value)
+            market_value.append(test_market_value)
+
         else:
             observation = data.iloc[index]
             portfolio = np.array([test_holdings, test_portfolio_value, test_market_value])
@@ -385,6 +362,8 @@ def main():
             test_market_value = new_market_value
 
             test_return.append((((test_portfolio_value/test_market_value)-1)*100))
+            agent_value.append(test_portfolio_value)
+            market_value.append(test_market_value)
 
         print("Test agent value: ", test_portfolio_value)
         print("Test stock holdings: ", test_holdings)
@@ -392,18 +371,21 @@ def main():
         print("Comparison %: ", ((test_portfolio_value/test_market_value)-1)*100)
         print("------------------------------------------------------------------")
 
-    e = []
-    a = []
-    # for i in episodes:
-    #     if i%50==0:
-    #         e.append(i)
-    # for i in range(len(advantages)):
-    #     if i%50==0:
-    #         a.append(np.mean(advantages[:i] * 100))
 
-    plt.suptitle('Berkshire', fontsize=20)
     plt.plot(test_episode, test_return)
+    plt.xlabel('Trading Days')
+    plt.ylabel('Agent Advantage %')
+    plt.title(stock)
     plt.grid()
+    plt.show()
+
+    plt.plot(test_episode, agent_value, color='blue', label="Agent")
+    plt.plot(test_episode, market_value, color='red', label="Buy and Hold")
+    plt.xlabel('Trading Days')
+    plt.ylabel('Portfolio Value')
+    plt.title(stock)
+    plt.grid()
+    plt.legend()
     plt.show()
 
 main()
