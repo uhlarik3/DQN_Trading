@@ -159,10 +159,8 @@ def process_test(path, split_date):
 
 def main():
 
-    stock = 'SPY'
+    stock = 'BP'
     split_date = '2019-01-01'
-    if stock in ['MNST', 'APA', 'AAPL']:
-        split_date = '2017-01-01'
 
     path = stock + '.csv'
     data = process_train(path, split_date)
@@ -322,11 +320,12 @@ def main():
     agent_value = []
     market_value = []
 
-    for index in range(len(test_data.index)):
+    for index in range(252):
+    #for index in range(len(test_data.index)):
         test_episode.append(index)
 
         if index==0:
-            observation = data.iloc[index]
+            observation = test_data.iloc[index]
             price = observation[0]
             test_portfolio_value = (price * test_holdings) + test_cash
             test_market_value = (price * test_buy_and_hold) + test_buy_hold_cash
@@ -335,7 +334,7 @@ def main():
             market_value.append(test_market_value)
 
         else:
-            observation = data.iloc[index]
+            observation = test_data.iloc[index]
             portfolio = np.array([test_holdings, test_portfolio_value, test_market_value])
             observation = np.append(observation, portfolio)
             action = TargetNet.get_action(observation, epsilon)
@@ -365,6 +364,7 @@ def main():
             agent_value.append(test_portfolio_value)
             market_value.append(test_market_value)
 
+
         print("Test agent value: ", test_portfolio_value)
         print("Test stock holdings: ", test_holdings)
         print("Test market value: ", test_market_value)
@@ -387,5 +387,6 @@ def main():
     plt.grid()
     plt.legend()
     plt.show()
+
 
 main()
